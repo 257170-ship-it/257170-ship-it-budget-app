@@ -14,7 +14,7 @@ export function parseSheet(data: unknown): AppState {
   return validateState(result);
 }
 export async function loadFromSheet(): Promise<AppState> {
-  const res = await fetch(API_URL + '?sheet=budget&_=' + Date.now(), { signal: AbortSignal.timeout(25000), cache: 'no-store', redirect: 'follow' });
+  const res = await fetch(API_URL + '?sheet=budget', { signal: AbortSignal.timeout(25000), cache: 'no-store', redirect: 'follow' });
   if (!res.ok) throw new Error('讀取失敗（HTTP ' + res.status + '）');
   return parseSheet(await res.json());
 }
