@@ -22,6 +22,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+        env:
+          VITE_SECURE_WEBAPP_URL: https://script.google.com/macros/s/AKfycbzw5qWTtnPW3U5NLvvnjxPzXpE3n5XC2QTkAJ6xUK7uYljnFXKsM4xrAAT-4GEpxVMU/exec
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
