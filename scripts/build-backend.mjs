@@ -1,3 +1,4 @@
+import { createBundleMarkup } from "./gas-html.mjs";
 import { build } from "esbuild";
 import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -55,9 +56,9 @@ await writeFile(
   out + "/Index.html",
   '<!doctype html><html lang="zh-Hant"><head><meta charset="UTF-8"><style>' +
     css.replaceAll("</style", "<\\/style") +
-    '</style></head><body><div id="root"></div>' + startup + '<script>' +
-    js.replaceAll("</script", "<\\/script") +
-    "</script></body></html>",
+    '</style></head><body><div id="root"></div>' + startup +
+    createBundleMarkup(js) +
+    "</body></html>",
 );
 console.log(
   "Apps Script package: " +
