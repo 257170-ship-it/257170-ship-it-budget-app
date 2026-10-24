@@ -1,0 +1,317 @@
+import { useState } from "react";
+import { useBudget } from "../context/BudgetContext";
+import { expenseTypes, money, typeLabels, type ExpenseType } from "../types";
+export function downloadBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+export default function Reports({
+  advancesOnly = false,
+}: {
+  advancesOnly?: boolean;
+}) {
+  const { state, status, dispatch } = useBudget();
+  const [project, setProject] = useState("");
+  const [type, setType] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [advanceStatus, setAdvanceStatus] = useState("");
+  const [notice, setNotice] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const rows = state.expenses
+    .filter(
+      (e) =>
+        (!project || e.projectId === project) &&
+        (!type || e.type === type) &&
+        (!from || e.date >= from) &&
+        (!to || e.date <= to) &&
+        (!advancesOnly || e.isAdvance) &&
+        (!advanceStatus ||
+          (e.isAdvance && (e.advanceStatus || "pending") === advanceStatus)),
+    )
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const name = (id: string) =>
+    state.projects.find((p) => p.id === id)?.name || "未知計畫";
+  const statusLabels = {
+    pending: "待核銷",
+    paid: "已付款",
+    reimbursed: "已歸墊",
+  };
+  async function exportExcel() {
+    setExporting(true);
+    setNotice("");
+    try {
+      const { Workbook } = await import("exceljs");
+      const workbook = new Workbook();
+      const sheet = workbook.addWorksheet("支出明細");
+      sheet.columns = [
+        { header: "日期", key: "date", width: 14 },
+        { header: "計畫", key: "project", width: 28 },
+        { header: "類別", key: "type", width: 16 },
+        { header: "金額", key: "amount", width: 16 },
+        { header: "用途", key: "description", width: 40 },
+        { header: "代墊人", key: "person", width: 16 },
+        { header: "代墊狀態", key: "status", width: 14 },
+        { header: "教師", key: "teacher", width: 16 },
+        { header: "原定時數", key: "hours", width: 14 },
+        { header: "請假時數", key: "leave", width: 14 },
+        { header: "實付時數", key: "actual", width: 14 },
+        { header: "費率", key: "rate", width: 14 },
+        { header: "憑證張數", key: "photos", width: 14 },
+      ];
+      rows.forEach((e) =>
+        sheet.addRow({
+          date: e.date,
+          project: name(e.projectId),
+          type: typeLabels[e.type],
+          amount: e.amount,
+          description: e.description,
+          person: e.advancePerson || "",
+          status: e.isAdvance ? statusLabels[e.advanceStatus || "pending"] : "",
+          teacher: e.teacherName || "",
+          hours: e.hours,
+          leave: e.leaveHours,
+          actual: e.actualHours,
+          rate: e.hourlyRate,
+          photos: e.photos.length,
+        }),
+      );
+      sheet.getColumn("amount").numFmt = "#,##0.00";
+      sheet.getRow(1).font = { bold: true };
+      sheet.views = [{ state: "frozen", ySplit: 1 }];
+      sheet.autoFilter = { from: "A1", to: "M1" };
+      const summary = workbook.addWorksheet("計畫經費");
+      summary.addRow([
+        "計畫",
+        "總經費",
+        "已支用",
+        "剩餘",
+        ...expenseTypes.flatMap((t) => [
+          typeLabels[t] + "上限",
+          typeLabels[t] + "已用",
+        ]),
+      ]);
+      state.projects
+        .filter((p) => !project || p.id === project)
+        .forEach((p) => {
+          const used = Object.values(p.used).reduce((a, b) => a + b, 0);
+          summary.addRow([
+            p.name,
+            p.totalBudget,
+            used,
+            p.totalBudget - used,
+            ...expenseTypes.flatMap((t) => [p.limits[t], p.used[t]]),
+          ]);
+        });
+      summary.columns.forEach((c) => {
+        c.width = 20;
+      });
+      summary.getRow(1).font = { bold: true };
+      const bytes = await workbook.xlsx.writeBuffer();
+      downloadBlob(
+        new Blob([bytes], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }),
+        "經費控帳報表.xlsx",
+      );
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "匯出失敗");
+    } finally {
+      setExporting(false);
+    }
+  }
+  return (
+    <section className="panel">
+      <div className="section-title">
+        <div>
+          <p className="eyebrow">
+            {advancesOnly ? "ADVANCE TRACKING" : "REPORTS & EXPORT"}
+          </p>
+          <h2>{advancesOnly ? "代墊費追蹤" : "支出報表"}</h2>
+        </div>
+        <button
+          disabled={exporting || !rows.length}
+          onClick={() => void exportExcel()}
+        >
+          {exporting ? "匯出中…" : "匯出 Excel ↗"}
+        </button>
+      </div>
+      <div className="filters">
+        <label>
+          計畫
+          <select value={project} onChange={(e) => setProject(e.target.value)}>
+            <option value="">全部計畫</option>
+            {state.projects.map((p) => (
+              <option value={p.id} key={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          類別
+          <select value={type} onChange={(e) => setType(e.target.value)}>
+            <option value="">全部類別</option>
+            {expenseTypes.map((t) => (
+              <option key={t} value={t}>
+                {typeLabels[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          起始日期
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </label>
+        <label>
+          結束日期
+          <input
+            type="date"
+            min={from}
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </label>
+        {advancesOnly && (
+          <label>
+            代墊狀態
+            <select
+              value={advanceStatus}
+              onChange={(e) => setAdvanceStatus(e.target.value)}
+            >
+              <option value="">全部狀態</option>
+              {Object.entries(statusLabels).map(([v, l]) => (
+                <option value={v} key={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      <div className="report-summary">
+        <span>
+          篩選結果 <strong>{rows.length} 筆</strong>
+        </span>
+        <span>
+          支出合計{" "}
+          <strong>{money(rows.reduce((sum, e) => sum + e.amount, 0))}</strong>
+        </span>
+        <span>
+          尚未歸墊{" "}
+          <strong>
+            {money(
+              rows
+                .filter((e) => e.isAdvance && e.advanceStatus !== "reimbursed")
+                .reduce((sum, e) => sum + e.amount, 0),
+            )}
+          </strong>
+        </span>
+      </div>
+      {notice && <p role="status">{notice}</p>}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>日期／計畫</th>
+              <th>類別／說明</th>
+              <th>金額</th>
+              <th>代墊資訊</th>
+              <th>憑證</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e) => (
+              <tr key={e.id}>
+                <td>
+                  {e.date}
+                  <small>{name(e.projectId)}</small>
+                </td>
+                <td>
+                  <span className="badge">{typeLabels[e.type]}</span>
+                  <p>{e.description}</p>
+                  {e.type === "hourly" && (
+                    <small>
+                      {e.teacherName} · {e.actualHours} 小時（請假{" "}
+                      {e.leaveHours} 小時）
+                    </small>
+                  )}
+                </td>
+                <td className="amount">{money(e.amount)}</td>
+                <td>
+                  {e.isAdvance ? (
+                    <>
+                      {e.advancePerson}
+                      <select
+                        aria-label={"代墊狀態 " + e.description}
+                        disabled={status !== "ready"}
+                        value={e.advanceStatus || "pending"}
+                        onChange={(ev) =>
+                          void dispatch({
+                            type: "UPDATE_EXPENSE",
+                            payload: {
+                              ...e,
+                              advanceStatus: ev.target.value as
+                                "pending" | "paid" | "reimbursed",
+                            },
+                          })
+                        }
+                      >
+                        {Object.entries(statusLabels).map(([v, l]) => (
+                          <option value={v} key={v}>
+                            {l}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td>
+                  {e.photos.length ? (
+                    <details>
+                      <summary>{e.photos.length} 張</summary>
+                      <div className="photos">
+                        {e.photos.map((p, i) => (
+                          <img key={i} src={p} alt={"憑證 " + (i + 1)} />
+                        ))}
+                      </div>
+                    </details>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td>
+                  <button
+                    className="text danger-text"
+                    disabled={status !== "ready"}
+                    onClick={() => {
+                      if (window.confirm("刪除此筆支出並回補計畫可用餘額？"))
+                        void dispatch({
+                          type: "DELETE_EXPENSE",
+                          payload: e.id,
+                        });
+                    }}
+                  >
+                    刪除
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!rows.length && <div className="empty">目前沒有符合條件的支出。</div>}
+      </div>
+    </section>
+  );
+}

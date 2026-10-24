@@ -9,3 +9,8 @@ work/
 outputs/
 .DS_Store
 .vercel/
+
+backend/generated/
+.clasp.json
+.clasprc.json
+*.backup.json

@@ -1,39 +1,115 @@
-import { type AppState } from './types';
-import { validateState } from './state';
-export const API_URL = import.meta.env?.VITE_GOOGLE_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbyeWXuTjEy2SSPPdeIL2V8q4k-v3PeLizmoEjU7CD4VAkQ8QwaOPtjQC0DHqvkzpVDt/exec';
-export function parseSheet(data: unknown): AppState {
-  if (!Array.isArray(data) || data[0]?.[0] !== 'key' || data[0]?.[1] !== 'value') throw new Error('API 未回傳預期的試算表資料；請檢查 Apps Script 部署權限。');
-  const result: Record<string, unknown> = {};
-  for (const row of data.slice(1)) {
-    if (!Array.isArray(row)) throw new Error('試算表資料列格式錯誤。');
-    if (row[0] === 'projects' || row[0] === 'expenses') {
-      if (row[0] in result) throw new Error('試算表有重複的資料鍵。');
-      result[row[0]] = JSON.parse(row[1]);
-    }
-  }
-  return validateState(result);
+import type { AppState, Command, Envelope } from "./types";
+import { validateState } from "./domain/core";
+export { loadFromSheet as loadLegacy } from "./legacy/api";
+interface Runner {
+  withSuccessHandler(fn: (result: unknown) => void): Runner;
+  withFailureHandler(fn: (error: { message: string }) => void): Runner;
+  budgetRpc(request: unknown): void;
 }
-export async function loadFromSheet(): Promise<AppState> {
-  const res = await fetch(API_URL + '?sheet=budget', { signal: AbortSignal.timeout(25000), cache: 'no-store', redirect: 'follow' });
-  if (!res.ok) throw new Error('讀取失敗（HTTP ' + res.status + '）');
-  return parseSheet(await res.json());
+declare global {
+  interface Window {
+    google?: { script?: { run?: Runner } };
+  }
+}
+export const hasSecureBridge = () =>
+  typeof window !== "undefined" && !!window.google?.script?.run;
+export function rpc<T>(request: unknown, timeout = 45000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const runner = window.google?.script?.run;
+    if (!runner) {
+      reject(
+        new Error(
+          "請在已登入的 Apps Script 安全帳本內操作；公開網站僅提供草稿預覽。",
+        ),
+      );
+      return;
+    }
+    let finished = false;
+    const timer = setTimeout(() => {
+      finished = true;
+      reject(new Error("連線逾時。請保留相同請求重試，避免重複入帳。"));
+    }, timeout);
+    runner
+      .withSuccessHandler((result) => {
+        if (!finished) {
+          finished = true;
+          clearTimeout(timer);
+          resolve(result as T);
+        }
+      })
+      .withFailureHandler((error) => {
+        if (!finished) {
+          finished = true;
+          clearTimeout(timer);
+          reject(new Error(error.message));
+        }
+      })
+      .budgetRpc(request);
+  });
+}
+function validateEnvelope(e: Envelope): Envelope {
+  if (
+    !e ||
+    e.schemaVersion !== 2 ||
+    !Number.isSafeInteger(e.revision) ||
+    e.revision < 0 ||
+    !e.user?.email ||
+    !["viewer", "entry", "editor", "admin"].includes(e.user.role)
+  )
+    throw new Error("安全帳本回應格式錯誤");
+  validateState(e.state);
+  return e;
+}
+export async function loadSecure(revision?: number): Promise<Envelope> {
+  return validateEnvelope(await rpc<Envelope>({ action: "load", revision }));
+}
+export async function saveSecure(
+  command: Command,
+  revision: number,
+  requestId: string,
+): Promise<Envelope> {
+  const result = validateEnvelope(
+    await rpc<Envelope>({
+      action: "command",
+      command,
+      expectedRevision: revision,
+      requestId,
+    }),
+  );
+  // Verify the exact committed revision, even if another user has since committed.
+  const verified = await loadSecure(result.revision);
+  if (JSON.stringify(verified.state) !== JSON.stringify(result.state))
+    throw new Error("寫入後驗證不一致；請下載未確認變更備份");
+  return verified;
+}
+export async function uploadAttachment(
+  projectId: string,
+  file: File,
+  kind: string,
+): Promise<Envelope> {
+  if (file.size > 8 * 1024 * 1024) throw new Error("附件上限8MB");
+  const content = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.onerror = () => reject(new Error("檔案讀取失敗"));
+    reader.readAsDataURL(file);
+  });
+  return validateEnvelope(
+    await rpc<Envelope>({
+      action: "upload",
+      projectId,
+      name: file.name,
+      mimeType: file.type,
+      kind,
+      content,
+      requestId: crypto.randomUUID(),
+    }),
+  );
+}
+export async function downloadAttachment(id: string) {
+  return rpc<{ name: string; mimeType: string; content: string }>({
+    action: "download",
+    id,
+  });
 }
 export const fingerprint = (state: AppState) => JSON.stringify(state);
-export function serializeSheet(state: AppState) {
-  const payload = [['key','value'], ['projects',JSON.stringify(state.projects)], ['expenses',JSON.stringify(state.expenses)]];
-  if (payload.some(row => row[1].length > 45000)) throw new Error('資料超過試算表單格安全容量（45,000 字元），請減少憑證照片或改用 Google Drive 儲存照片。');
-  return payload;
-}
-export async function saveToSheet(state: AppState, baseline: AppState): Promise<AppState> {
-  const payload = serializeSheet(state);
-  const latest = await loadFromSheet();
-  if (fingerprint(latest) !== fingerprint(baseline)) throw new Error('雲端資料已被其他電腦修改。請先下載未儲存備份，再重新載入雲端資料。');
-  const res = await fetch(API_URL + '?sheet=budget', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30000), redirect: 'follow' });
-  if (!res.ok) throw new Error('儲存失敗（HTTP ' + res.status + '）');
-  let reply: unknown;
-  try { reply = await res.json(); } catch { throw new Error('API 回應不是 JSON，請確認 Apps Script 已允許網頁存取。'); }
-  if (!reply || (typeof reply === 'object' && ('error' in reply || ('success' in reply && !reply.success)))) throw new Error('Apps Script 回報儲存失敗。');
-  const saved = await loadFromSheet();
-  if (fingerprint(saved) !== fingerprint(state)) throw new Error('寫入後驗證不一致，請下載備份並重新載入確認；尚未標記為已同步。');
-  return saved;
-}
