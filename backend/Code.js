@@ -167,13 +167,21 @@ function request_(r) {
   if (!/^[a-zA-Z0-9-]{8,160}$/.test(r.requestId || ""))
     throw new Error("requestId無效");
 }
+function requestHash_(payload) {
+  return "c1:" + hash_(Domain.canonicalJSON(payload));
+}
 function duplicate_(book, r, payload, actor) {
   const found = values_(sheet_(book, "Journal")).find(
     (row) => row[2] === "COMMITTED" && row[3] === r.requestId,
   );
   if (!found) return null;
-  if (found[4] !== hash_(payload) || found[5] !== actor.email)
-    throw new Error("同一requestId不可用於不同內容或使用者");
+  // Old journal rows remain valid only when their original hash still matches.
+  // Never accept an old mismatch by guessing that the operation was equivalent.
+  const expected = String(found[4]).startsWith("c1:")
+    ? requestHash_(payload)
+    : hash_(payload);
+  if (found[4] !== expected || found[5] !== actor.email)
+    throw new Error("REQUEST_ID_CONFLICT：同一requestId不可用於不同內容或使用者；請先下載未確認變更備份，再重新同步核對已入帳資料，勿另建請求重送");
   return envelope_(book, actor, Number(found[1]));
 }
 function folder_() {
@@ -242,7 +250,7 @@ function upload_(r, actor) {
         next,
         before.revision + 1,
         r.requestId,
-        hash_(payload),
+        requestHash_(payload),
         actor,
       );
     } catch (error) {
@@ -344,7 +352,7 @@ function migrate_(r, actor) {
       preview.state,
       current.revision + 1,
       r.requestId,
-      hash_(payload),
+      requestHash_(payload),
       actor,
     );
   });
@@ -401,7 +409,7 @@ function budgetRpc(r) {
         next,
         current.revision + 1,
         r.requestId,
-        hash_(r.command),
+        requestHash_(r.command),
         actor,
       );
     });

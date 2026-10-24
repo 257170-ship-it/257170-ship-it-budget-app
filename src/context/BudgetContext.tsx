@@ -131,7 +131,7 @@ export function BudgetProvider({ children }: { children: ReactNode }) {
         return true;
       }
       const p = {
-        command,
+        command: JSON.parse(JSON.stringify(command)) as Command,
         preview: next,
         revision: rev.current,
         requestId: crypto.randomUUID(),

@@ -1,3 +1,4 @@
+import { canonicalJSON } from "./domain/serialization";
 import type { AppState, Command, Envelope } from "./types";
 import { validateState } from "./domain/core";
 export { loadFromSheet as loadLegacy } from "./legacy/api";
@@ -78,7 +79,7 @@ export async function saveSecure(
   );
   // Verify the exact committed revision, even if another user has since committed.
   const verified = await loadSecure(result.revision);
-  if (JSON.stringify(verified.state) !== JSON.stringify(result.state))
+  if (canonicalJSON(verified.state) !== canonicalJSON(result.state))
     throw new Error("寫入後驗證不一致；請下載未確認變更備份");
   return verified;
 }
@@ -112,4 +113,4 @@ export async function downloadAttachment(id: string) {
     id,
   });
 }
-export const fingerprint = (state: AppState) => JSON.stringify(state);
+export const fingerprint = (state: AppState) => canonicalJSON(state);

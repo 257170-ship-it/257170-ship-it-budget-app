@@ -67,6 +67,7 @@ function Workspace() {
           ? selected
           : projects[0]?.id || "";
   const notices = useMemo(() => warnings(state), [state]);
+  const requestConflict = /REQUEST_ID_CONFLICT|同一requestId不可用於不同內容或使用者/.test(error);
   const budget = projects
       .filter((p) => cap(p) !== null)
       .reduce((n, p) => n + cap(p)!, 0),
@@ -226,12 +227,15 @@ function Workspace() {
                 </button>
                 <button
                   className="secondary"
-                  disabled={status === "saving"}
+                  disabled={status === "saving" || requestConflict}
                   onClick={() => void retry()}
                 >
                   以相同請求ID重試
                 </button>
               </div>
+            )}
+            {requestConflict && (
+              <p className="hint">此請求可能已有資料成功提交。請先下載未確認變更備份，再按上方「重新同步」核對計畫與支出；不要重新新增同一筆資料。舊版請求校驗不符時不會自動重送。</p>
             )}
             <p className="hint">失敗不會回寫空資料；畫面保留最後確認的狀態。</p>
           </div>

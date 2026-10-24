@@ -415,3 +415,29 @@ test("unrecognized legacy whole-table requests cannot write v2 tables", () => {
   );
   assert.equal(h.rpc({ action: "load" }).revision, 0);
 });
+
+test("request retry tolerates recursively reordered object keys but rejects changed values and actors", () => {
+  const h = harness(), id = randomUUID();
+  const cmd = { type: "saveProject", value: project, reason: "新增" };
+  h.send(cmd, 0, id);
+  function reverseKeys(value: any): any {
+    if (Array.isArray(value)) return value.map(reverseKeys);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).reverse().map(([key, v]) => [key, reverseKeys(v)]));
+    return value;
+  }
+  assert.equal(h.send(reverseKeys(cmd), 0, id).revision, 1);
+  assert.equal(h.sheets.get("Journal").rows.length, 2);
+  assert.throws(() => h.send({ ...cmd, value: { ...project, name: "changed" } }, 0, id), /REQUEST_ID_CONFLICT/);
+  h.setEmail("editor@example.test");
+  assert.throws(() => h.send(cmd, 0, id), /REQUEST_ID_CONFLICT/);
+});
+
+test("legacy journal hashes remain readable and never bypass a mismatch", () => {
+  const h = harness(), id = randomUUID();
+  const cmd = { type: "saveProject", value: project, reason: "新增" };
+  h.send(cmd, 0, id);
+  h.sheets.get("Journal").rows[1][4] = createHash("sha256").update(JSON.stringify(cmd)).digest("hex");
+  assert.equal(h.send(cmd, 0, id).revision, 1);
+  assert.throws(() => h.send({ reason: cmd.reason, value: project, type: cmd.type }, 0, id), /REQUEST_ID_CONFLICT/);
+  assert.equal(h.sheets.get("Journal").rows.length, 2);
+});

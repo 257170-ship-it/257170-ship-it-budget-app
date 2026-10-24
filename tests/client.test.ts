@@ -141,3 +141,17 @@ test("network/RPC failures retain same id for explicit retries", async () => {
   await saveSecure(cmd, 0, "same-request-id");
   assert.deepEqual(seen, ["same-request-id", "same-request-id"]);
 });
+
+test("read-after-write verification ignores object key order from RPC serialization", async () => {
+  const state = { ...emptyState(), projects: [{ ...blankProject("p"), name: "RPC order" }] };
+  const base: Envelope = { schemaVersion: 2, revision: 1, state, user: { email: "test@example.test", role: "admin" }, environment: "test" };
+  function reverseKeys(value: any): any {
+    if (Array.isArray(value)) return value.map(reverseKeys);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).reverse().map(([key, v]) => [key, reverseKeys(v)]));
+    return value;
+  }
+  bridge((req) => req.action === "load" ? reverseKeys(base) : base);
+  const result = await saveSecure({ type: "saveProject", value: state.projects[0], reason: "test" }, 0, "request-order-test");
+  assert.equal(result.revision, 1);
+  assert.equal(result.state.projects[0].name, "RPC order");
+});

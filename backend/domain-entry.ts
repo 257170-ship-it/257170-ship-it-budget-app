@@ -14,3 +14,5 @@ export function parseLegacyTable(rows: unknown[][]) {
   }
   return validateState(found);
 }
+
+export { canonicalJSON } from "../src/domain/serialization";
